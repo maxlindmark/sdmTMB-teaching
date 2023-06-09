@@ -5,7 +5,7 @@
 # sdmTMB vignette
 # https://pbs-assess.github.io/sdmTMB/index.html
 
-touse <- c("here","tidyverse","sdmTMB","sf","rnaturalearth","viridis","ggOceanMaps","alphahull") 
+touse <- c("here","tidyverse","sdmTMB","sf","rnaturalearth","viridis","ggOceanMaps","alphahull")
 lapply(touse, require, character.only=TRUE, quietly=TRUE)
 plotdir <- here('exercises','coastal-survey-ex','plots')
 resdir <- here('exercises','coastal-survey-ex','results')
@@ -14,13 +14,13 @@ if(!dir.exists(resdir)) dir.create(resdir, recursive=TRUE)
 
 # read clean data frame with cod swept area density (kg / nm2)
 # dfc <- readRDS(here('data','survey_catch_clean.rds'))
-dfc <- readRDS(here('data','survey_catch_clean_stox.rds'))
+dfc <- readRDS(here('imr-2023/data','survey_catch_clean_stox.rds'))
 dfc <- filter(dfc, !is.na(BottomDepth))
 
 # -----------------------------------------------------------------------------
 # map of spatiotemporal coverage
 maxswept <- max(dfc$dens_over15cm)
-g <- basemap(limits = c(5, 22, 61.9, 72.5), land.col = "grey95") +
+g <- ggOceanMaps::basemap(limits = c(5, 22, 61.9, 72.5), land.col = "grey95") +
   scale_y_continuous(breaks = seq(62,73,by=1), name='', expand=c(0,0)) +
   scale_x_continuous(breaks = seq(5,22,by=5), name='', expand=c(0,0)) +
   geom_spatial_point(data = dfc %>% filter(dens_over15cm == 0), aes(lon, lat), shape ="x", show.legend=F)+
@@ -41,11 +41,11 @@ dev.off()
 
 dfc$fyear <- factor(dfc$year)
 fit0 <- sdmTMB(formula = dens_over15cm ~ 0 + fyear,
-               data=dfc, 
+               data=dfc,
                time="fyear",
                spatial='off',
                spatiotemporal='off',
-               mesh=mesh, 
+               mesh=mesh,
                family = tweedie(link = "log"))
 
 sanity(fit0)
@@ -61,11 +61,11 @@ tidy(fit0, "ran_pars", conf.int=T)
 
 # add bottom depth as quadratic
 fit1 <- sdmTMB(formula = dens_over15cm ~ 0 + fyear + poly(BottomDepth, 2),
-               data=dfc, 
+               data=dfc,
                time="fyear",
                spatial='off',
                spatiotemporal='off',
-               mesh=mesh, 
+               mesh=mesh,
                family = tweedie(link = "log"))
 
 sanity(fit1)
@@ -81,11 +81,11 @@ tidy(fit1, "ran_pars", conf.int=T, digits=3) %>% print(n = Inf)
 
 # add spatial
 fit2 <- sdmTMB(formula = dens_over15cm ~ 0 + fyear + poly(BottomDepth, 2),
-               data=dfc, 
+               data=dfc,
                time="fyear",
                spatial='on',
                spatiotemporal='off',
-               mesh=mesh, 
+               mesh=mesh,
                family = tweedie(link = "log"))
 
 sanity(fit2)
@@ -101,11 +101,11 @@ tidy(fit2, "ran_pars", conf.int=T, digits=3) %>% print(n = Inf)
 
 # add spatiotemporal IID
 fit3 <- sdmTMB(formula = dens_over15cm ~ 0 + fyear + poly(BottomDepth, 2),
-               data=dfc, 
+               data=dfc,
                time="fyear",
                spatial='on',
                spatiotemporal='IID',
-               mesh=mesh, 
+               mesh=mesh,
                family = tweedie(link = "log"))
 
 sanity(fit3)

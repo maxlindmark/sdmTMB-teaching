@@ -1,20 +1,250 @@
 ---
 title: "Exercise 03"
-format: html
-editor: visual
+format: 
+  html:
+    embed-resources: true
+    fig-width: 12
+    fig-height: 10
+editor: source
 execute: 
   echo: true
   eval: true
+  cache: true
 ---
 
-```{r, message=FALSE, warning=FALSE}
-#| echo=FALSE
-library(sdmTMB)
-library(dplyr)
-library(ggplot2)
+```{r}
+#| cache=FALSE,
+#| message=FALSE, warning=FALSE, output=FALSE
+touse <- c("sdmTMB", "dplyr", "tidyr", "ggplot2", "here", "sf",
+           "rnaturalearth", "viridis", "ggOceanMaps", "alphahull")
+lapply(touse, require, character.only = TRUE, quietly = TRUE)
+
 options(ggplot2.continuous.colour = "viridis")
 options(ggplot2.continuous.fill = "viridis")
+
 theme_set(theme_light())
+theme_update(legend.position = "bottom",
+             legend.key.height = unit(0.2, "cm"),
+             legend.margin = margin(0, 0, 0, 0),
+             legend.box.margin = margin(-5, -5, -5, -5),
+             strip.text = element_text(size = 9, colour = 'gray10',
+                                       margin = margin(b = 1, t = 1)),
+             strip.background = element_rect(fill = "grey95"),
+             panel.grid.major = element_blank(),
+             panel.grid.minor = element_blank())
 ```
 
-# 
+```{r load cache}
+# To load entire cache in interactive r session, do: 
+# qwraps2::lazyload_cache_dir(path = paste0(home, "/imr-2023/exercises/03-exercise_cache/html"))
+```
+
+## Read data
+
+```{r}
+#|cache=FALSE
+# For some reason, this code works not when knitting... 
+# dfc <- readRDS(paste0(here::here(),
+#                       "/imr-2023/data/survey_catch_clean_stox.rds")) |>
+#   filter(!is.na(BottomDepth))
+
+dfc <- readRDS("/Users/maxlindmark/Dropbox/Max work/R/sdmTMB-teaching/imr-2023/data/survey_catch_clean_stox.rds") |> 
+  filter(!is.na(BottomDepth))
+```
+
+## Inspect data
+
+```{r}
+glimpse(dfc)
+
+hist(dfc$month)
+hist(dfc$day)
+```
+
+## Plot data
+
+```{r}
+maxswept <- max(dfc$dens_over15cm)
+basemap(limits = c(5, 22, 61.9, 72.5), land.col = "grey95") +
+  scale_y_continuous(breaks = seq(62,73,by=1), name='', expand=c(0,0)) +
+  scale_x_continuous(breaks = seq(5,22,by=5), name='', expand=c(0,0)) +
+  geom_spatial_point(data = dfc %>% filter(dens_over15cm == 0), aes(lon, lat), shape ="x", show.legend=F)+
+  geom_spatial_point(data = dfc %>% filter(dens_over15cm > 0), aes(lon, lat, size = dens_over15cm, color=stockarea), alpha = 0.6)+
+  facet_wrap(vars(year), ncol=7) +
+  scale_size_continuous(limits = c(0,maxswept)) +
+  labs(x = "", y = "", size = "Swept area density cod")+
+  theme(legend.position = "bottom")
+```
+
+## Make mesh
+
+```{r}
+dfc <- add_utm_columns(dfc, c("lon", "lat"), units="km") # UTM zone 32 covers majority of data, 6-12E
+
+mesh <- make_mesh(dfc, xy_cols = c("X","Y"), cutoff = 3)
+plot(mesh)
+```
+
+## Fit null model
+
+```{r}
+dfc$fyear <- factor(dfc$year)
+
+fit0 <- sdmTMB(formula = dens_over15cm ~ 0 + fyear,
+               data = dfc,
+               time = "fyear",
+               spatial = 'off',
+               spatiotemporal = 'off',
+               mesh = mesh,
+               family = tweedie(link = "log"),
+               control = sdmTMBcontrol(newton_loops = 1))
+
+sanity(fit0)
+
+dfc$res0 <- residuals(fit0)
+
+ggplot(data = dfc, aes(X, Y, color = res0)) + 
+  geom_point() +
+  coord_fixed() +
+  scale_color_gradient2() +
+  facet_wrap(~year)
+```
+
+## Add stock area?
+Not entirely sure what the mechanism would be though... population structure? Body size? Though the residual cluster is narrower than the stock area.
+
+```{r}
+dfc$fstockarea <- factor(dfc$stockarea)
+
+fit1 <- sdmTMB(formula = dens_over15cm ~ 0 + fyear + fstockarea,
+               data = dfc,
+               time = "fyear",
+               spatial = 'off',
+               spatiotemporal = 'off',
+               mesh = mesh,
+               family = tweedie(link = "log"),
+               control = sdmTMBcontrol(newton_loops = 1))
+
+sanity(fit1)
+
+dfc$res1 <- residuals(fit1)
+
+dfc |> 
+  rename(non_spatial = res0,
+         non_spatial_stockarea = res1) |> 
+  pivot_longer(c("non_spatial", "non_spatial_stockarea")) |> 
+  ggplot(aes(X, Y, color = value)) + 
+  geom_point() +
+  coord_fixed() +
+  scale_color_gradient2() +
+  facet_wrap(~name) +
+  NULL
+
+AIC(fit0, fit1)
+```
+
+## Add spatial random effect
+This should be able to deal with the residual spatial pattern
+
+```{r}
+fit2 <- sdmTMB(formula = dens_over15cm ~ 0 + fyear + fstockarea,
+               data = dfc,
+               time = "fyear",
+               spatial = 'on',
+               spatiotemporal = 'off',
+               mesh = mesh,
+               family = tweedie(link = "log"),
+               control = sdmTMBcontrol(newton_loops = 1))
+
+sanity(fit2)
+
+dfc$res2 <- residuals(fit2)
+
+dfc |> 
+  rename(non_spatial_stockarea = res1,
+         spatial_field = res2) |> 
+  pivot_longer(c("non_spatial_stockarea", "spatial_field")) |> 
+  ggplot(aes(X, Y, color = value)) + 
+  geom_point() +
+  coord_fixed() +
+  scale_color_gradient2() +
+  facet_wrap(~name) +
+  NULL
+```
+
+This looks good! Is it still good when we look by year?
+
+```{r}
+dfc |>
+  rename(spatial_field = res2) |> 
+  ggplot(aes(X, Y, color = spatial_field)) + 
+  geom_point(size = 0.8) +
+  coord_fixed() +
+  scale_color_gradient2() +
+  facet_wrap(~year) +
+  NULL
+```
+
+I guess overall, but perhaps some small clusters within some years. Try adding a spatiotemporal IID field
+
+## Add spatiotemporal random effect
+
+```{r}
+fit3 <- sdmTMB(formula = dens_over15cm ~ 0 + fyear + fstockarea,
+               data = dfc,
+               time = "fyear",
+               spatial = 'on',
+               spatiotemporal = 'iid',
+               mesh = mesh,
+               family = tweedie(link = "log"),
+               control = sdmTMBcontrol(newton_loops = 1))
+
+sanity(fit3)
+
+dfc$res3 <- residuals(fit3)
+
+ggplot(dfc, aes(X, Y, color = res3)) + 
+  geom_point() +
+  coord_fixed() +
+  scale_color_gradient2() +
+  facet_wrap(~year) +
+  NULL
+```
+
+```{r}
+ggplot(dfc, aes(sample = res3)) +
+    stat_qq() +
+    stat_qq_line() +
+    theme(aspect.ratio = 1)
+```
+
+Hmm, neither residuals in space nor qq plots look great. Try a delta-gamma model for more flexibility?
+
+## Delta-gamma model
+
+```{r}
+fit4 <- sdmTMB(formula = dens_over15cm ~ 0 + fyear,
+               data = dfc,
+               time = "fyear",
+               spatial = 'on',
+               spatiotemporal = 'iid',
+               mesh = mesh,
+               family = delta_gamma(),
+               control = sdmTMBcontrol(newton_loops = 1))
+
+sanity(fit4)
+
+dfc$res4 <- residuals(fit4)
+
+ggplot(dfc, aes(X, Y, color = res4)) + 
+  geom_point() +
+  coord_fixed() +
+  scale_color_gradient2() +
+  facet_wrap(~year) +
+  NULL
+
+ggplot(dfc, aes(sample = res4)) +
+    stat_qq() +
+    stat_qq_line() +
+    theme(aspect.ratio = 1)
+```
